@@ -1,5 +1,7 @@
-flask
 gunicorn
+flask
+flask_sqlalchemy
+sqlalchemy
 
 
 
