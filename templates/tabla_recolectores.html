@@ -32,6 +32,8 @@
                         <td><input type="text" name="nombre[]" value="{{ recolector.nombre }}"></td>
                         <td><input type="text" name="apellido[]" value="{{ recolector.apellido }}"></td>
                         <td><input type="number" name="cantidad_recolectada[]" step="0.01" value="{{ recolector.cantidad_recolectada }}"></td>
+                        <td><input type="number" name="Dia[]" step="0.01" value="{{ recolector.Dia }}"></td>
+
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -51,6 +53,7 @@
     </div>
 </body>
 </html>
+
 
 
 
