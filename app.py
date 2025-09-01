@@ -1,23 +1,58 @@
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, flash
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import IntegrityError
+from collections import defaultdict
 
 app = Flask(__name__)
+app.secret_key = "supersecreto"  # ⚠️ cámbialo en producción
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///recolectores.db"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Ruta principal que muestra el formulario de inicio
-@app.route('/')
+db = SQLAlchemy(app)
+
+# Orden fijo para mostrar los días en los registros
+DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+
+
+# -------------------------
+# MODELOS
+# -------------------------
+class Recolector(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(50), nullable=False)
+    apellido = db.Column(db.String(50), nullable=False)
+    dia = db.Column(db.String(15), nullable=False)  # día de la semana
+    cantidad_recolectada = db.Column(db.Float, default=0.0)
+    total_alimentacion = db.Column(db.Float, default=0.0)
+    total_no_alimentacion = db.Column(db.Float, default=0.0)
+
+    def __repr__(self):
+        return f"<Recolector {self.nombre} {self.apellido} - {self.dia}>"
+
+
+# -------------------------
+# RUTAS PRINCIPALES
+# -------------------------
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-# Ruta para procesar el formulario y calcular los precios
-@app.route('/calcular', methods=['POST'])
+
+@app.route("/calcular", methods=["POST"])
 def calcular():
-    valor = float(request.form['valor_carga_cafe'])
-    precio_kilo_alimentacion = float(request.form['precio_kilo_alimentacion'])
-    precio_kilo_no_alimentacion = float(request.form['precio_kilo_no_alimentacion'])
+    try:
+        valor = float(request.form["valor_carga_cafe"])
+        precio_kilo_alimentacion = float(request.form["precio_kilo_alimentacion"])
+        precio_kilo_no_alimentacion = float(request.form["precio_kilo_no_alimentacion"])
 
-    cafe_seco = float(request.form['cafe_seco'])
-    cafe_verde = float(request.form['cafe_verde'])
-    cafe_colorado = float(request.form['cafe_colorado'])
+        cafe_seco = float(request.form["cafe_seco"])
+        cafe_verde = float(request.form["cafe_verde"])
+        cafe_colorado = float(request.form["cafe_colorado"])
+    except (KeyError, ValueError):
+        flash("Error en los datos ingresados. Verifica los valores numéricos.", "error")
+        return redirect(url_for("index"))
 
+    # Cálculos
     porcentaje_seco = cafe_seco
     porcentaje_verde = cafe_verde * 0.92
     porcentaje_colorado = cafe_colorado * 0.35
@@ -32,124 +67,135 @@ def calcular():
     Precio_colorado = valor_colorado * porcentaje_colorado
     Precio_total = Precio_seco + Precio_verde + Precio_colorado
 
-    return render_template('resultado.html', Precio_seco=Precio_seco,
-                           Precio_verde=Precio_verde,
-                           Precio_colorado=Precio_colorado,
-                           porcentaje_seco=porcentaje_seco,
-                           porcentaje_verde=porcentaje_verde,
-                           porcentaje_colorado=porcentaje_colorado,
-                           porcentaje_colorado_seco=porcentaje_colorado_seco,
-                           valor_seco=valor_seco,
-                           valor_verde=valor_verde,
-                           valor_colorado=valor_colorado,
-                           Precio_total=Precio_total)
+    return render_template(
+        "resultado.html",
+        Precio_seco=Precio_seco,
+        Precio_verde=Precio_verde,
+        Precio_colorado=Precio_colorado,
+        porcentaje_seco=porcentaje_seco,
+        porcentaje_verde=porcentaje_verde,
+        porcentaje_colorado=porcentaje_colorado,
+        porcentaje_colorado_seco=porcentaje_colorado_seco,
+        valor_seco=valor_seco,
+        valor_verde=valor_verde,
+        valor_colorado=valor_colorado,
+        Precio_total=Precio_total,
+    )
 
-# Inicializar recolectores con al menos cinco registros por defecto
-recolectores = [{'nombre': '', 'apellido': '', 'cantidad_recolectada': 0.0} for _ in range(5)]
 
-# Ruta para mostrar la tabla de recolectores
-@app.route('/tabla_recolectores')
+# -------------------------
+# RECOLECTORES
+# -------------------------
+@app.route("/tabla_recolectores")
 def tabla_recolectores():
-    return render_template('tabla_recolectores.html', recolectores=recolectores)
+    recolectores = Recolector.query.all()
+    return render_template("tabla_recolectores.html", recolectores=recolectores)
 
-# Ruta para guardar los recolectores desde el formulario
-@app.route('/guardar_recolectores', methods=['POST'])
+
+@app.route("/guardar_recolectores", methods=["POST"])
 def guardar_recolectores():
-    global recolectores
-    nombres = request.form.getlist('nombre[]')
-    apellidos = request.form.getlist('apellido[]')
-    cantidades_recolectadas = request.form.getlist('cantidad_recolectada[]')
-    precio_alimentacion = float(request.form['precio_alimentacion'])
-    precio_no_alimentacion = float(request.form['precio_no_alimentacion'])
+    try:
+        nombres = request.form.getlist("nombre[]")
+        apellidos = request.form.getlist("apellido[]")
+        dias = request.form.getlist("dia[]")
+        cantidades = request.form.getlist("cantidad_recolectada[]")
+        precio_alimentacion = float(request.form["precio_alimentacion"])
+        precio_no_alimentacion = float(request.form["precio_no_alimentacion"])
+    except (KeyError, ValueError):
+        flash("Error en los datos ingresados. Verifica los valores numéricos.", "error")
+        return redirect(url_for("tabla_recolectores"))
 
-    recolectores_temp = []
-    recolector_counts = {}
+    # Eliminar registros anteriores
+    Recolector.query.delete()
 
     for i in range(len(nombres)):
-        nombre = nombres[i].strip().lower()
-        apellido = apellidos[i].strip().lower()
-        cantidad_recolectada = float(cantidades_recolectadas[i]) if cantidades_recolectadas[i] else 0.0
+        nombre = (nombres[i] or "").strip()
+        apellido = (apellidos[i] or "").strip()
+        dia = (dias[i] or "").strip() or "Lunes"
+        try:
+            cantidad = float(cantidades[i]) if cantidades[i] else 0.0
+        except ValueError:
+            cantidad = 0.0
 
-        key = f"{nombre} {apellido}"
-        if key in recolector_counts:
-            recolector_counts[key] += 1
-        else:
-            recolector_counts[key] = 1
+        total_alim = cantidad * precio_alimentacion
+        total_no_alim = cantidad * precio_no_alimentacion
 
-        if recolector_counts[key] > 5:
-            error_message = f"No puede {nombres[i]} {apellidos[i]} tener más de cinco casillas. Por favor, utilizar solo 5 casillas por recolector."
-            return render_template('tabla_recolectores.html', recolectores=recolectores, error_message=error_message)
+        recolector = Recolector(
+            nombre=nombre,
+            apellido=apellido,
+            dia=dia,
+            cantidad_recolectada=cantidad,
+            total_alimentacion=total_alim,
+            total_no_alimentacion=total_no_alim,
+        )
+        db.session.add(recolector)
 
-        total_alimentacion = cantidad_recolectada * precio_alimentacion
-        total_no_alimentacion = cantidad_recolectada * precio_no_alimentacion
-        recolector = {
-            'nombre': nombres[i],
-            'apellido': apellidos[i],
-            'cantidad_recolectada': cantidad_recolectada,
-            'total_alimentacion': total_alimentacion,
-            'total_no_alimentacion': total_no_alimentacion
-        }
-        recolectores_temp.append(recolector)
+    try:
+        db.session.commit()
+        flash("Registros guardados correctamente.", "success")
+    except IntegrityError:
+        db.session.rollback()
+        flash("Error al guardar en la base de datos.", "error")
 
-    recolectores = recolectores_temp
-    return redirect(url_for('tabla_recolectores'))
+    return redirect(url_for("tabla_recolectores"))
 
-# Ruta para borrar todos los registros de recolectores
-@app.route('/borrar_registros', methods=['POST'])
+
+@app.route("/borrar_registros", methods=["POST"])
 def borrar_registros():
-    global recolectores
-    # Mantener las primeras cinco casillas en blanco
-    recolectores = recolectores[:5]
-    for recolector in recolectores:
-        recolector['nombre'] = ''
-        recolector['apellido'] = ''
-        recolector['cantidad_recolectada'] = 0.0
-        recolector['total_alimentacion'] = 0.0
-        recolector['total_no_alimentacion'] = 0.0
-    return redirect(url_for('ver_registros'))
+    Recolector.query.delete()
+    db.session.commit()
+    flash("Todos los registros han sido borrados.", "info")
+    return redirect(url_for("ver_registros"))
 
-# Ruta para agregar una casilla adicional de recolector
-@app.route('/agregar_casilla', methods=['POST'])
-def agregar_casilla():
-    global recolectores
-    recolectores.append({'nombre': '', 'apellido': '', 'cantidad_recolectada': 0.0})
-    return redirect(url_for('tabla_recolectores'))
 
-# Ruta para eliminar la última casilla de recolector
-@app.route('/eliminar_casilla', methods=['POST'])
-def eliminar_casilla():
-    global recolectores
-    if len(recolectores) > 5:
-        recolectores.pop()
-    return redirect(url_for('tabla_recolectores'))
-
-# Ruta para ver los registros guardados de los recolectores
-@app.route('/ver_registros')
+@app.route("/ver_registros")
 def ver_registros():
-    global recolectores
+    recolectores = Recolector.query.all()
 
-    # Agrupar recolectores por nombre y apellido
-    recolectores_agrupados = {}
-    for recolector in recolectores:
-        key = f"{recolector['nombre']} {recolector['apellido']}"
-        if key not in recolectores_agrupados:
-            recolectores_agrupados[key] = []
-        recolectores_agrupados[key].append(recolector)
+    # Agrupar por recolector y día, acumulando cantidades e importes
+    agrupados = defaultdict(lambda: {
+        "dias": defaultdict(lambda: {"cantidad": 0.0, "alim": 0.0, "no_alim": 0.0}),
+        "total_semanal": 0.0,
+        "alim_semanal": 0.0,
+        "no_alim_semanal": 0.0
+    })
 
-    # Calcular los totales
-    total_alimentacion = sum(r['total_alimentacion'] for r in recolectores)
-    total_no_alimentacion = sum(r['total_no_alimentacion'] for r in recolectores)
+    for r in recolectores:
+        key = f"{(r.nombre or '').strip()} {(r.apellido or '').strip()}".strip()
+        d = r.dia or "Lunes"
+        bucket = agrupados[key]["dias"][d]
+        bucket["cantidad"] += float(r.cantidad_recolectada or 0.0)
+        bucket["alim"] += float(r.total_alimentacion or 0.0)
+        bucket["no_alim"] += float(r.total_no_alimentacion or 0.0)
 
-    return render_template('registros_guardados.html', 
-                           recolectores_agrupados=recolectores_agrupados, 
-                           total_alimentacion=total_alimentacion, 
-                           total_no_alimentacion=total_no_alimentacion)
+        agrupados[key]["total_semanal"] += float(r.cantidad_recolectada or 0.0)
+        agrupados[key]["alim_semanal"] += float(r.total_alimentacion or 0.0)
+        agrupados[key]["no_alim_semanal"] += float(r.total_no_alimentacion or 0.0)
 
+    total_alimentacion = sum(float(r.total_alimentacion or 0.0) for r in recolectores)
+    total_no_alimentacion = sum(float(r.total_no_alimentacion or 0.0) for r in recolectores)
+
+    # Convertir defaultdicts a dict para Jinja
+    agrupados = {k: {
+        "dias": dict(v["dias"]),
+        "total_semanal": v["total_semanal"],
+        "alim_semanal": v["alim_semanal"],
+        "no_alim_semanal": v["no_alim_semanal"],
+    } for k, v in agrupados.items()}
+
+    return render_template(
+        "registros_guardados.html",
+        recolectores_agrupados=agrupados,
+        dias_semana=DIAS_SEMANA,
+        total_alimentacion=total_alimentacion,
+        total_no_alimentacion=total_no_alimentacion,
+    )
+
+
+# -------------------------
+# MAIN
+# -------------------------
 if __name__ == "__main__":
+    with app.app_context():
+        db.create_all()
     app.run(debug=True)
-
-
-
-
-
-
